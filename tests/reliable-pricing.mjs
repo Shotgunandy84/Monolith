@@ -1,56 +1,7 @@
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import vm from "node:vm";
-import ts from "typescript";
+import { createBuilderHarness } from "./builder-harness.mjs";
 
-// Exercise the actual builder state handlers without a browser or extra packages.
-// Only replace the JSX return; calculations and handlers remain unchanged.
-const source = fs.readFileSync(
-  new URL("../src/app/estimates/builder/page.tsx", import.meta.url),
-  "utf8",
-).replace(/\r\n/g, "\n");
-const boundary = source.indexOf("  return (\n    <main", source.indexOf("function EstimateBuilder()"));
-assert.ok(boundary > 0, "Builder JSX boundary must exist");
-const harnessSource = source.slice(0, boundary) + `
-  return {
-    sections, totals, labourCost, labourHours,
-    openBuildUp, addBuildUpLine, updateBuildUpLine, deleteBuildUpLine,
-    updateQuantity, updateCostRate, updateSellRate, resetSellToTarget,
-    changeTargetMargin, applyPreviousRate, openAllowance, applyAllowance,
-    setPreviousRateItem, setAllowanceValue,
-  };
-}
-export default EstimateBuilder;
-`;
-const states = [];
-let cursor = 0;
-const exportsObject = {};
-vm.runInNewContext(ts.transpileModule(harnessSource, {
-  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2017 },
-}).outputText, {
-  exports: exportsObject,
-  require(name) {
-    if (name === "react") return {
-      useMemo: (calculate) => calculate(),
-      useState(initial) {
-        const index = cursor++;
-        if (!(index in states)) states[index] = typeof initial === "function" ? initial() : initial;
-        return [states[index], (value) => {
-          states[index] = typeof value === "function" ? value(states[index]) : value;
-        }];
-      },
-    };
-    if (name === "next/navigation") return {
-      useRouter: () => ({}),
-      useSearchParams: () => new URLSearchParams(),
-    };
-    throw new Error(`Unexpected import: ${name}`);
-  },
-});
-function render() {
-  cursor = 0;
-  return exportsObject.default();
-}
+const render = createBuilderHarness();
 function item(state) {
   return state.sections.find((section) => section.id === 2).items.find((entry) => entry.id === 202);
 }

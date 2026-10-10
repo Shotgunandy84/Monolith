@@ -2,6 +2,7 @@
 
 import { Suspense, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { estimateTemplates } from "@/lib/estimateTemplates";
 
 type BuildUpLine = {
   id: number;
@@ -20,7 +21,7 @@ type EstimateItem = {
   costRate: number;
   sellRate: number;
   sellOverridden?: boolean;
-  source: "Historical" | "Built Up" | "Allowance" | "Not priced";
+  source: "Historical" | "Built Up" | "Allowance" | "Manual" | "Not priced";
   allowanceNote?: string;
   buildUp?: BuildUpLine[];
 };
@@ -543,7 +544,20 @@ function EstimateBuilder() {
   const area = searchParams.get("area") || "45";
 
   const [sections, setSections] = useState<EstimateSection[]>(() =>
-    initialSections.map((section) => ({
+    (template === "Single Storey Extension" ? initialSections :
+      (Object.prototype.hasOwnProperty.call(estimateTemplates, template) ? estimateTemplates[template] : []).map((section, index) => ({
+        id: index + 1,
+        name: section.name,
+        items: section.items.map((name, itemIndex): EstimateItem => ({
+          id: (index + 1) * 100 + itemIndex + 1,
+          name,
+          quantity: 1,
+          unit: "item",
+          costRate: 0,
+          sellRate: 0,
+          source: "Not priced",
+        })),
+      }))).map((section) => ({
       ...section,
       items: section.items.map((item) =>
         item.source === "Built Up"
@@ -587,10 +601,15 @@ function EstimateBuilder() {
   const [newItemName, setNewItemName] = useState("");
   const [newItemQuantity, setNewItemQuantity] = useState("1");
   const [newItemUnit, setNewItemUnit] = useState("item");
+  const [newItemCost, setNewItemCost] = useState("");
+  const [newItemSell, setNewItemSell] = useState("");
+  const [itemError, setItemError] = useState("");
+  const [newSectionName, setNewSectionName] = useState("");
+  const [addingSection, setAddingSection] = useState(false);
 
   const [newItemMethod, setNewItemMethod] = useState<
-    "Historical" | "Built Up" | "Allowance"
-  >("Historical");
+    "Manual" | "Historical" | "Built Up" | "Allowance"
+  >("Manual");
 
   const overheadPercent = 10;
   const contingencyPercent = 5;
@@ -709,10 +728,10 @@ function EstimateBuilder() {
   const pricedItems = sections.flatMap((section) => section.items);
 
   const pricedCount = pricedItems.filter(
-    (item) => item.source !== "Not priced",
+    (item) => item.source !== "Not priced" && (item.costRate > 0 || item.sellRate > 0),
   ).length;
 
-  const progress = Math.round((pricedCount / pricedItems.length) * 100);
+  const progress = pricedItems.length ? Math.round((pricedCount / pricedItems.length) * 100) : 0;
 
   const labourHours = sections.reduce(
     (total, section) =>
@@ -749,23 +768,34 @@ function EstimateBuilder() {
     0,
   );
   function addEstimateItem() {
-    if (!addItemModal || !newItemName.trim()) {
+    if (!addItemModal || !sections.some((section) => section.id === addItemModal.sectionId)) {
+      return;
+    }
+
+    const quantity = Number(newItemQuantity);
+    const costRate = Number(newItemCost);
+    const sellRate = Number(newItemSell);
+    if (!newItemName.trim() || !newItemUnit.trim() || !newItemQuantity.trim() ||
+      ![quantity, costRate, sellRate].every((value) => Number.isFinite(value) && value >= 0)) {
+      setItemError("Enter a description, unit and valid non-negative quantities and rates.");
       return;
     }
 
     const sectionId = addItemModal.sectionId;
-    const itemId = Date.now();
-
-    const quantity = Number(newItemQuantity) || 1;
+    const itemId = Math.max(0, ...sections.flatMap((section) => section.items.map((item) => item.id))) + 1;
+    const directPricing = newItemMethod === "Manual" || newItemMethod === "Allowance";
+    const manuallyPriced = directPricing && newItemSell.trim() !== "";
 
     const newItem: EstimateItem = {
       id: itemId,
       name: newItemName.trim(),
       quantity,
       unit: newItemUnit.trim() || "item",
-      costRate: 0,
-      sellRate: 0,
-      source: newItemMethod,
+      costRate: directPricing ? costRate : 0,
+      sellRate: directPricing ? (manuallyPriced ? sellRate : calculatedSellRate(costRate, targetMargin)) : 0,
+      sellOverridden: manuallyPriced,
+      source: directPricing && (newItemCost.trim() !== "" || manuallyPriced)
+        ? newItemMethod : "Not priced",
       ...(newItemMethod === "Built Up"
         ? {
             buildUp: [],
@@ -798,7 +828,10 @@ function EstimateBuilder() {
     setNewItemName("");
     setNewItemQuantity("1");
     setNewItemUnit("item");
-    setNewItemMethod("Historical");
+    setNewItemMethod("Manual");
+    setNewItemCost("");
+    setNewItemSell("");
+    setItemError("");
 
     if (newItemMethod === "Built Up") {
       setBuildUpItem({
@@ -813,7 +846,7 @@ function EstimateBuilder() {
         itemId,
       });
 
-      setAllowanceValue("");
+      setAllowanceValue(String(costRate));
       setAllowanceNote("");
     }
 
@@ -826,6 +859,59 @@ function EstimateBuilder() {
       setRateSearch("");
     }
   }
+
+  function addEstimateSection() {
+    const name = newSectionName.trim();
+    if (!name) return;
+    const id = Math.max(0, ...sections.map((section) => section.id)) + 1;
+    setSections((current) => [...current, { id, name, items: [] }]);
+    setExpandedSections((current) => [...current, id]);
+    setNewSectionName("");
+    setAddingSection(false);
+  }
+
+  function renameSection(sectionId: number, name: string) {
+    setSections((current) => current.map((section) =>
+      section.id === sectionId ? { ...section, name } : section,
+    ));
+  }
+
+  function updateItemDescription(sectionId: number, itemId: number, name: string) {
+    setSections((current) => current.map((section) => section.id !== sectionId ? section : {
+      ...section,
+      items: section.items.map((item) => item.id === itemId ? { ...item, name } : item),
+    }));
+  }
+
+  function updateItemUnit(sectionId: number, itemId: number, unit: string) {
+    setSections((current) => current.map((section) => section.id !== sectionId ? section : {
+      ...section,
+      items: section.items.map((item) => item.id === itemId ? { ...item, unit } : item),
+    }));
+  }
+
+  function deleteEstimateItem(sectionId: number, itemId: number) {
+    const item = sections.find((section) => section.id === sectionId)?.items.find((item) => item.id === itemId);
+    if (!item || !window.confirm(`Delete "${item.name}"? This cannot be undone.`)) return;
+    setSections((current) => current.map((section) => section.id !== sectionId ? section : {
+      ...section, items: section.items.filter((item) => item.id !== itemId),
+    }));
+    if (buildUpItem?.sectionId === sectionId && buildUpItem.itemId === itemId) setBuildUpItem(null);
+    if (previousRateItem?.sectionId === sectionId && previousRateItem.itemId === itemId) setPreviousRateItem(null);
+    if (allowanceItem?.sectionId === sectionId && allowanceItem.itemId === itemId) setAllowanceItem(null);
+  }
+
+  function deleteEstimateSection(sectionId: number) {
+    const section = sections.find((section) => section.id === sectionId);
+    if (!section || !window.confirm(`Delete section "${section.name}" and all ${section.items.length} items? This cannot be undone.`)) return;
+    setSections((current) => current.filter((section) => section.id !== sectionId));
+    setExpandedSections((current) => current.filter((id) => id !== sectionId));
+    if (buildUpItem?.sectionId === sectionId) setBuildUpItem(null);
+    if (previousRateItem?.sectionId === sectionId) setPreviousRateItem(null);
+    if (allowanceItem?.sectionId === sectionId) setAllowanceItem(null);
+    if (addItemModal?.sectionId === sectionId) setAddItemModal(null);
+  }
+
   function toggleSection(id: number) {
     setExpandedSections((current) =>
       current.includes(id)
@@ -835,6 +921,7 @@ function EstimateBuilder() {
   }
 
   function updateQuantity(sectionId: number, itemId: number, value: number) {
+    if (!Number.isFinite(value) || value < 0) return;
     setSections((current) =>
       current.map((section) =>
         section.id !== sectionId
@@ -855,6 +942,7 @@ function EstimateBuilder() {
   }
 
   function updateCostRate(sectionId: number, itemId: number, value: number) {
+    if (!Number.isFinite(value) || value < 0) return;
     setSections((current) =>
       current.map((section) =>
         section.id !== sectionId
@@ -874,6 +962,7 @@ function EstimateBuilder() {
                   ...item,
                   costRate: value,
                   sellRate: newSell,
+                  source: item.source === "Not priced" ? "Manual" : item.source,
                 };
               }),
             },
@@ -882,6 +971,7 @@ function EstimateBuilder() {
   }
 
   function updateSellRate(sectionId: number, itemId: number, value: number) {
+    if (!Number.isFinite(value) || value < 0) return;
     setSections((current) =>
       current.map((section) =>
         section.id !== sectionId
@@ -895,6 +985,7 @@ function EstimateBuilder() {
                       ...item,
                       sellRate: value,
                       sellOverridden: true,
+                      source: item.source === "Not priced" ? "Manual" : item.source,
                     },
               ),
             },
@@ -979,7 +1070,7 @@ function EstimateBuilder() {
     if (!activeBuildUpItem) return;
 
     const newLine: BuildUpLine = {
-      id: Date.now(),
+      id: Math.max(0, ...(activeBuildUpItem.item.buildUp || []).map((line) => line.id)) + 1,
       category: "Material",
       description: "New item",
       quantity: 1,
@@ -1201,7 +1292,12 @@ function EstimateBuilder() {
           </div>
 
           <div className="space-y-3">
-            {sections.map((section) => {
+            {sections.length === 0 && (
+              <div className="rounded-2xl border border-[#ded8cc] bg-[#fbfaf7] p-6 text-sm text-[#777168]">
+                No sections yet. Add a section below, then add the work you need.
+              </div>
+            )}
+            {sections.map((section, sectionIndex) => {
               const expanded = expandedSections.includes(section.id);
 
               const sectionSellTotal = section.items.reduce(
@@ -1214,17 +1310,22 @@ function EstimateBuilder() {
                   key={section.id}
                   className="overflow-hidden rounded-2xl border border-[#ded8cc] bg-[#fbfaf7]"
                 >
-                  <button
-                    onClick={() => toggleSection(section.id)}
-                    className="flex w-full items-center justify-between px-5 py-4 text-left transition hover:bg-[#f8f5ef]"
+                  <div
+                    className="flex w-full flex-wrap items-center justify-between gap-3 px-5 py-4 text-left"
                   >
                     <div className="flex items-center gap-4">
                       <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#eee7dc] text-xs font-medium text-[#8a6846]">
-                        {String(section.id).padStart(2, "0")}
+                        {String(sectionIndex + 1).padStart(2, "0")}
                       </span>
 
                       <div>
-                        <div className="font-medium">{section.name}</div>
+                        <input
+                          aria-label={`Section ${sectionIndex + 1} name`}
+                          value={section.name}
+                          onChange={(event) => renameSection(section.id, event.target.value)}
+                          onBlur={(event) => renameSection(section.id, event.target.value.trim() || "Untitled section")}
+                          className="w-full min-w-0 rounded border border-transparent bg-transparent font-medium outline-none hover:border-[#d8d1c5] focus:border-[#9b7650]"
+                        />
 
                         <div className="mt-0.5 text-xs text-[#918a80]">
                           {section.items.length} items
@@ -1243,11 +1344,23 @@ function EstimateBuilder() {
                         </div>
                       </div>
 
-                      <span className="text-[#8a6846]">
+                      <button
+                        onClick={() => deleteEstimateSection(section.id)}
+                        aria-label={`Delete section ${section.name}`}
+                        className="text-xs text-[#918a80] hover:text-[#9b503d]"
+                      >
+                        Delete
+                      </button>
+                      <button
+                        onClick={() => toggleSection(section.id)}
+                        aria-label={`${expanded ? "Collapse" : "Expand"} ${section.name}`}
+                        aria-expanded={expanded}
+                        className="flex h-8 w-8 items-center justify-center rounded-lg text-[#8a6846] hover:bg-[#eee7dc]"
+                      >
                         {expanded ? "−" : "+"}
-                      </span>
+                      </button>
                     </div>
-                  </button>
+                  </div>
 
                   {expanded && (
                     <div className="border-t border-[#e7e2d9]">
@@ -1313,12 +1426,18 @@ function EstimateBuilder() {
                             <div className="px-5 py-4">
                               <div className="grid gap-4 lg:grid-cols-[1fr_100px_80px_120px_120px_120px] lg:items-center">
                                 <div>
-                                  <div className="font-medium">{item.name}</div>
+                                  <input
+                                    aria-label="Item description"
+                                    value={item.name}
+                                    onChange={(event) => updateItemDescription(section.id, item.id, event.target.value)}
+                                    onBlur={(event) => updateItemDescription(section.id, item.id, event.target.value.trim() || "Untitled item")}
+                                    className="w-full rounded border border-transparent bg-transparent font-medium outline-none hover:border-[#d8d1c5] focus:border-[#9b7650]"
+                                  />
 
                                   <div className="mt-1 flex flex-wrap items-center gap-2">
                                     <span
                                       className={`rounded-full px-2 py-0.5 text-[10px] ${
-                                        item.source === "Historical"
+                                        item.source === "Historical" || item.source === "Manual"
                                           ? "bg-[#eee7dc] text-[#7c5d3d]"
                                           : item.source === "Built Up"
                                             ? "bg-[#e7eee7] text-[#526452]"
@@ -1369,9 +1488,13 @@ function EstimateBuilder() {
                                     Unit
                                   </label>
 
-                                  <div className="rounded-lg bg-[#eeeae2] px-3 py-2 text-center text-sm text-[#777168]">
-                                    {item.unit}
-                                  </div>
+                                  <input
+                                    aria-label={`Unit for ${item.name}`}
+                                    value={item.unit}
+                                    onChange={(event) => updateItemUnit(section.id, item.id, event.target.value)}
+                                    onBlur={(event) => updateItemUnit(section.id, item.id, event.target.value.trim() || "item")}
+                                    className="w-full rounded-lg border border-transparent bg-[#eeeae2] px-3 py-2 text-center text-sm text-[#777168] outline-none focus:border-[#9b7650]"
+                                  />
                                 </div>
 
                                 <div>
@@ -1529,6 +1652,13 @@ function EstimateBuilder() {
                                 <button className="rounded-lg border border-[#d8d1c5] bg-white px-3 py-2 text-xs text-[#777168] transition hover:bg-[#f8f5ef]">
                                   Note
                                 </button>
+                                <button
+                                  onClick={() => deleteEstimateItem(section.id, item.id)}
+                                  aria-label={`Delete item ${item.name}`}
+                                  className="rounded-lg border border-[#d8d1c5] bg-white px-3 py-2 text-xs text-[#777168] transition hover:bg-[#fff8f5] hover:text-[#9b503d]"
+                                >
+                                  Delete
+                                </button>
                               </div>
                             </div>
                           </div>
@@ -1544,17 +1674,75 @@ function EstimateBuilder() {
                           setNewItemName("");
                           setNewItemQuantity("1");
                           setNewItemUnit("item");
-                          setNewItemMethod("Historical");
+                          setNewItemMethod("Manual");
+                          setNewItemCost("");
+                          setNewItemSell("");
+                          setItemError("");
                         }}
                         className="w-full px-5 py-3 text-left text-xs font-medium text-[#8a6846] transition hover:bg-[#f8f5ef]"
                       >
                         + Add item
                       </button>
+                      {addItemModal?.sectionId === section.id && (
+                        <form
+                          onSubmit={(event) => { event.preventDefault(); addEstimateItem(); }}
+                          className="space-y-4 border-t border-[#e7e2d9] bg-[#f7f4ee] p-5"
+                        >
+                          <h3 className="font-serif text-lg">Add item to {section.name}</h3>
+                          <div className="grid gap-3 sm:grid-cols-[1fr_100px_100px]">
+                            <EditorField label="Description" value={newItemName} onChange={setNewItemName} required autoFocus />
+                            <EditorField label="Quantity" value={newItemQuantity} onChange={setNewItemQuantity} type="number" required />
+                            <EditorField label="Unit" value={newItemUnit} onChange={setNewItemUnit} required />
+                          </div>
+                          <label className="block text-xs font-medium text-[#625b52]">
+                            Pricing method
+                            <select
+                              value={newItemMethod}
+                              onChange={(event) => setNewItemMethod(event.target.value as typeof newItemMethod)}
+                              className="mt-2 block w-full rounded-lg border border-[#d8d1c5] bg-white px-3 py-2 text-sm outline-none focus:border-[#9b7650]"
+                            >
+                              <option value="Manual">Enter rates</option>
+                              <option value="Built Up">Build up from components</option>
+                              <option value="Historical">Use a previous rate</option>
+                              <option value="Allowance">Allowance</option>
+                            </select>
+                          </label>
+                          {(newItemMethod === "Manual" || newItemMethod === "Allowance") ? (
+                            <div className="grid gap-3 sm:grid-cols-2">
+                              <EditorField label="Cost / unit (£) — optional" value={newItemCost} onChange={setNewItemCost} type="number" />
+                              <EditorField label="Sell / unit (£) — blank uses target margin" value={newItemSell} onChange={setNewItemSell} type="number" />
+                            </div>
+                          ) : (
+                            <p className="text-xs text-[#777168]">
+                              {newItemMethod === "Built Up" ? "Add this item, then enter its cost components." : "Add this item, then choose a matching previous rate. If none exists, enter rates in the estimate row."}
+                            </p>
+                          )}
+                          {itemError && <p role="alert" className="text-sm text-[#9b503d]">{itemError}</p>}
+                          <div className="flex gap-3">
+                            <button type="submit" className="rounded-xl bg-[#9b7650] px-4 py-2 text-sm font-medium text-white hover:bg-[#886746]">Add item</button>
+                            <button type="button" onClick={() => setAddItemModal(null)} className="rounded-xl px-4 py-2 text-sm text-[#777168] hover:bg-[#eee7dc]">Cancel</button>
+                          </div>
+                        </form>
+                      )}
                     </div>
                   )}
                 </section>
               );
             })}
+            {addingSection ? (
+              <form
+                onSubmit={(event) => { event.preventDefault(); addEstimateSection(); }}
+                className="space-y-4 rounded-2xl border border-[#ded8cc] bg-[#fbfaf7] p-5"
+              >
+                <EditorField label="Section name" value={newSectionName} onChange={setNewSectionName} required autoFocus />
+                <div className="flex gap-3">
+                  <button type="submit" className="rounded-xl bg-[#9b7650] px-4 py-2 text-sm font-medium text-white hover:bg-[#886746]">Add section</button>
+                  <button type="button" onClick={() => { setAddingSection(false); setNewSectionName(""); }} className="rounded-xl px-4 py-2 text-sm text-[#777168] hover:bg-[#eee7dc]">Cancel</button>
+                </div>
+              </form>
+            ) : (
+              <button onClick={() => setAddingSection(true)} className="w-full rounded-2xl border border-dashed border-[#b89977] px-5 py-4 text-left text-sm font-medium text-[#8a6846] hover:bg-[#eee7dc]">+ Add section</button>
+            )}
           </div>
         </section>
 
@@ -2203,6 +2391,31 @@ export default function EstimateBuilderPage() {
     >
       <EstimateBuilder />
     </Suspense>
+  );
+}
+
+function EditorField({ label, value, onChange, type = "text", required = false, autoFocus = false }: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  type?: "text" | "number";
+  required?: boolean;
+  autoFocus?: boolean;
+}) {
+  return (
+    <label className="block text-xs font-medium text-[#625b52]">
+      {label}
+      <input
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        type={type}
+        min={type === "number" ? "0" : undefined}
+        step={type === "number" ? "any" : undefined}
+        required={required}
+        autoFocus={autoFocus}
+        className="mt-2 block w-full rounded-lg border border-[#d8d1c5] bg-white px-3 py-2 text-sm outline-none focus:border-[#9b7650]"
+      />
+    </label>
   );
 }
 

@@ -1,0 +1,68 @@
+type TemplateSection = { name: string; items: string[] };
+
+// Structure only: rates must be entered by the estimator, never inferred here.
+export const estimateTemplates: Record<string, TemplateSection[]> = {
+  "Blank Estimate": [],
+  "Double Storey Extension": [
+    { name: "Preliminaries", items: ["Site setup", "Waste & skips"] },
+    { name: "Groundworks", items: ["Excavation", "Foundations", "Drainage"] },
+    { name: "Structure", items: ["External walls", "Steelwork", "Upper floor", "Internal walls"] },
+    { name: "Roof", items: ["Roof structure", "Roof covering"] },
+    { name: "Windows & Doors", items: ["Windows", "External doors"] },
+    { name: "Internal Works", items: ["Plastering", "Flooring", "Decoration"] },
+    { name: "Services", items: ["Electrical", "Plumbing", "Heating"] },
+    { name: "Completion", items: ["Snagging", "Final clean"] },
+  ],
+  "Loft Conversion": [
+    { name: "Preliminaries", items: ["Access & scaffolding", "Waste & skips"] },
+    { name: "Roof & Structure", items: ["Structural alterations", "Roof alterations", "Insulation"] },
+    { name: "Access & Windows", items: ["Staircase", "Roof windows"] },
+    { name: "Internal Works", items: ["Partitions", "Plastering", "Flooring", "Decoration"] },
+    { name: "Services", items: ["Electrical", "Heating"] },
+    { name: "Completion", items: ["Snagging", "Final clean"] },
+  ],
+  "Full House Renovation": [
+    { name: "Preliminaries & Strip Out", items: ["Site setup", "Strip out", "Waste & skips"] },
+    { name: "Building Repairs", items: ["Structural repairs", "Roof repairs", "Windows & doors"] },
+    { name: "Internal Works", items: ["Partitions", "Plastering", "Flooring", "Decoration"] },
+    { name: "Services", items: ["Electrical", "Plumbing", "Heating"] },
+    { name: "Completion", items: ["Snagging", "Final clean"] },
+  ],
+  "Kitchen Renovation": [
+    { name: "Preparation", items: ["Kitchen strip out", "Waste disposal"] },
+    { name: "Services", items: ["Electrical alterations", "Plumbing alterations"] },
+    { name: "Kitchen Installation", items: ["Cabinets", "Worktops", "Appliance installation"] },
+    { name: "Finishes", items: ["Tiling", "Flooring", "Decoration"] },
+    { name: "Completion", items: ["Snagging", "Final clean"] },
+  ],
+  "Bathroom Renovation": [
+    { name: "Preparation", items: ["Bathroom strip out", "Waste disposal"] },
+    { name: "Services", items: ["Plumbing alterations", "Electrical & ventilation"] },
+    { name: "Bathroom Installation", items: ["Sanitaryware", "Shower installation"] },
+    { name: "Finishes", items: ["Waterproofing", "Tiling", "Flooring", "Decoration"] },
+    { name: "Completion", items: ["Snagging", "Final clean"] },
+  ],
+  "New Build House": [
+    { name: "Preliminaries", items: ["Site setup", "Access & scaffolding"] },
+    { name: "Groundworks", items: ["Excavation", "Foundations", "Drainage", "Ground floor"] },
+    { name: "Structure", items: ["External walls", "Upper floors", "Internal walls"] },
+    { name: "Roof", items: ["Roof structure", "Roof covering"] },
+    { name: "Windows & Doors", items: ["Windows", "External doors"] },
+    { name: "Internal Works", items: ["Staircase", "Plastering", "Flooring", "Decoration"] },
+    { name: "Services", items: ["Electrical", "Plumbing", "Heating"] },
+    { name: "External Works", items: ["Paths & paving", "Landscaping"] },
+    { name: "Completion", items: ["Snagging", "Final clean"] },
+  ],
+  "New Build Bungalow": [
+    { name: "Preliminaries", items: ["Site setup", "Access & scaffolding"] },
+    { name: "Groundworks", items: ["Excavation", "Foundations", "Drainage", "Ground floor"] },
+    { name: "Structure", items: ["External walls", "Internal walls"] },
+    { name: "Roof", items: ["Roof structure", "Roof covering"] },
+    { name: "Windows & Doors", items: ["Windows", "External doors"] },
+    { name: "Internal Works", items: ["Plastering", "Flooring", "Decoration"] },
+    { name: "Services", items: ["Electrical", "Plumbing", "Heating"] },
+    { name: "External Works", items: ["Paths & paving", "Landscaping"] },
+    { name: "Completion", items: ["Snagging", "Final clean"] },
+  ],
+  "General Works": [{ name: "General Works", items: [] }],
+};
