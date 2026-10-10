@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Suspense, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 type BuildUpLine = {
@@ -509,7 +509,28 @@ function calculatedSellRate(costRate: number, targetMargin: number) {
   return costRate / (1 - targetMargin / 100);
 }
 
-export default function EstimateBuilderPage() {
+function withBuildUpPricing(
+  item: EstimateItem,
+  buildUp: BuildUpLine[],
+  targetMargin: number,
+): EstimateItem {
+  const costRate = buildUp.reduce(
+    (total, line) => total + line.quantity * line.rate,
+    0,
+  );
+
+  return {
+    ...item,
+    buildUp,
+    source: "Built Up",
+    costRate,
+    sellRate: item.sellOverridden
+      ? item.sellRate
+      : calculatedSellRate(costRate, targetMargin),
+  };
+}
+
+function EstimateBuilder() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -521,7 +542,16 @@ export default function EstimateBuilderPage() {
 
   const area = searchParams.get("area") || "45";
 
-  const [sections, setSections] = useState<EstimateSection[]>(initialSections);
+  const [sections, setSections] = useState<EstimateSection[]>(() =>
+    initialSections.map((section) => ({
+      ...section,
+      items: section.items.map((item) =>
+        item.source === "Built Up"
+          ? withBuildUpPricing(item, item.buildUp || [], 22)
+          : item,
+      ),
+    })),
+  );
 
   const [expandedSections, setExpandedSections] = useState<number[]>([1, 2, 3]);
 
@@ -690,7 +720,7 @@ export default function EstimateBuilderPage() {
       section.items.reduce(
         (itemTotal, item) =>
           itemTotal +
-          (item.buildUp || [])
+          (item.source === "Built Up" ? item.buildUp || [] : [])
             .filter((line) => line.category === "Labour")
             .reduce(
               (lineTotal, line) => lineTotal + line.quantity * item.quantity,
@@ -707,7 +737,7 @@ export default function EstimateBuilderPage() {
       section.items.reduce(
         (itemTotal, item) =>
           itemTotal +
-          (item.buildUp || [])
+          (item.source === "Built Up" ? item.buildUp || [] : [])
             .filter((line) => line.category === "Labour")
             .reduce(
               (lineTotal, line) =>
@@ -832,7 +862,7 @@ export default function EstimateBuilderPage() {
           : {
               ...section,
               items: section.items.map((item) => {
-                if (item.id !== itemId) {
+                if (item.id !== itemId || item.source === "Built Up") {
                   return item;
                 }
 
@@ -893,6 +923,24 @@ export default function EstimateBuilderPage() {
     );
   }
 
+  function openBuildUp(sectionId: number, itemId: number) {
+    setSections((current) =>
+      current.map((section) =>
+        section.id !== sectionId
+          ? section
+          : {
+              ...section,
+              items: section.items.map((item) =>
+                item.id !== itemId
+                  ? item
+                  : withBuildUpPricing(item, item.buildUp || [], targetMargin),
+              ),
+            },
+      ),
+    );
+    setBuildUpItem({ sectionId, itemId });
+  }
+
   function updateBuildUpLine(
     sectionId: number,
     itemId: number,
@@ -909,9 +957,9 @@ export default function EstimateBuilderPage() {
               items: section.items.map((item) =>
                 item.id !== itemId
                   ? item
-                  : {
-                      ...item,
-                      buildUp: (item.buildUp || []).map((line) =>
+                  : withBuildUpPricing(
+                      item,
+                      (item.buildUp || []).map((line) =>
                         line.id !== lineId
                           ? line
                           : {
@@ -919,7 +967,8 @@ export default function EstimateBuilderPage() {
                               [field]: value,
                             },
                       ),
-                    },
+                      targetMargin,
+                    ),
               ),
             },
       ),
@@ -947,11 +996,11 @@ export default function EstimateBuilderPage() {
               items: section.items.map((item) =>
                 item.id !== activeBuildUpItem.item.id
                   ? item
-                  : {
-                      ...item,
-                      buildUp: [...(item.buildUp || []), newLine],
-                      source: "Built Up",
-                    },
+                  : withBuildUpPricing(
+                      item,
+                      [...(item.buildUp || []), newLine],
+                      targetMargin,
+                    ),
               ),
             },
       ),
@@ -972,12 +1021,13 @@ export default function EstimateBuilderPage() {
               items: section.items.map((item) =>
                 item.id !== itemId
                   ? item
-                  : {
-                      ...item,
-                      buildUp: (item.buildUp || []).filter(
+                  : withBuildUpPricing(
+                      item,
+                      (item.buildUp || []).filter(
                         (line) => line.id !== lineId,
                       ),
-                    },
+                      targetMargin,
+                    ),
               ),
             },
       ),
@@ -1337,6 +1387,7 @@ export default function EstimateBuilderPage() {
                                     <input
                                       type="number"
                                       value={item.costRate}
+                                      readOnly={item.source === "Built Up"}
                                       onChange={(event) =>
                                         updateCostRate(
                                           section.id,
@@ -1439,10 +1490,7 @@ export default function EstimateBuilderPage() {
                               <div className="mt-4 flex flex-wrap gap-2">
                                 <button
                                   onClick={() =>
-                                    setBuildUpItem({
-                                      sectionId: section.id,
-                                      itemId: item.id,
-                                    })
+                                    openBuildUp(section.id, item.id)
                                   }
                                   className="rounded-lg bg-[#eee7dc] px-3 py-2 text-xs font-medium text-[#7c5d3d] transition hover:bg-[#e7dece]"
                                 >
@@ -2141,6 +2189,20 @@ export default function EstimateBuilderPage() {
         </div>
       )}
     </main>
+  );
+}
+
+export default function EstimateBuilderPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="flex min-h-screen items-center justify-center bg-[#f7f4ee] text-[#777168]">
+          Loading...
+        </main>
+      }
+    >
+      <EstimateBuilder />
+    </Suspense>
   );
 }
 
